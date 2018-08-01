@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"flag"
 
 	_ "github.com/docker/docker/daemon/graphdriver/aufs"
 	_ "github.com/docker/docker/daemon/graphdriver/overlay2"
@@ -65,7 +66,70 @@ func mountContainer(containerID, graphDriver string) string {
 	return newRootPath
 }
 
+func mountBalenaContainerLocal(layer_root, mount_dest string) string {
+
+	rawGraphDriver, err := ioutil.ReadFile(filepath.Join(layer_root,"/current/boot/storage-driver"))
+	if err != nil {
+		log.Fatal("could not get storage driver:", err)
+	}
+	graphDriver := strings.TrimSpace(string(rawGraphDriver))
+
+	current, err := os.Readlink(filepath.Join(layer_root,"/current"))
+	if err != nil {
+		log.Fatal("could not get container ID:", err)
+	}
+	containerID := filepath.Base(current)
+
+	if err := os.MkdirAll(mount_dest, os.ModePerm); err != nil {
+		log.Fatal("creating %s failed:", mount_dest, err)
+	}
+
+	ls, err := layer.NewStoreFromOptions(layer.StoreOptions{
+		Root:                      filepath.Join(layer_root,"/balena"),
+		MetadataStorePathTemplate: filepath.Join(layer_root, "balena", "image", "%s", "layerdb"),
+		IDMappings:                &idtools.IDMappings{},
+		GraphDriver:               graphDriver,
+		OS:                        "linux",
+	})
+	if err != nil {
+		log.Fatal("error loading layer store:", err)
+	}
+
+	rwlayer, err := ls.GetRWLayer(containerID)
+	if err != nil {
+		log.Fatal("error getting container layer:", err)
+	}
+
+	rwlayer.Unmount()
+	newRoot, err := rwlayer.Mount(mount_dest)
+	if err != nil {
+		log.Fatal("error mounting container fs:", err)
+	}
+	newRootPath := newRoot.Path()
+
+	if err := unix.Mount("", newRootPath, "", unix.MS_REMOUNT, ""); err != nil {
+		log.Fatal("error remounting container as read/write:", err)
+	}
+	unix.Mount("", newRootPath, "", unix.MS_REMOUNT|unix.MS_RDONLY, "")
+
+	if err := unix.Mount(newRootPath,mount_dest, "", unix.MS_BIND, ""); err != nil {
+		log.Println("could not move mountpoint:", newRootPath, err)
+	}
+
+	return newRootPath
+}
+
 func main() {
+
+	// If a custom layer_root and mount destination are passed, use those
+	layerPtr := flag.String("layer_root", "" , "root of partition e.g. /mnt/sysroot/inactive")
+	mountDestPtr := flag.String("mount_dest", "" , "mount point destination e.g. /tmp/oldroot")
+	flag.Parse()
+	if *layerPtr != "" && *mountDestPtr != "" {
+		mountBalenaContainerLocal(*layerPtr, *mountDestPtr)
+		os.Exit(0)
+	}
+
 	// Any mounts done by initrd will be transfered in the new root
 	mounts, err := mount.GetMounts(nil)
 
