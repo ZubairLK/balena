@@ -32,7 +32,7 @@ func mountContainer(containerID, graphDriver string) string {
 	defer unix.Unmount("/dev/shm", unix.MNT_DETACH)
 
 	ls, err := layer.NewStoreFromOptions(layer.StoreOptions{
-		StorePath:                 LAYER_ROOT,
+		Root:                 LAYER_ROOT,
 		MetadataStorePathTemplate: filepath.Join(LAYER_ROOT, "image", "%s", "layerdb"),
 		IDMappings:                &idtools.IDMappings{},
 		GraphDriver:               graphDriver,
